@@ -12,8 +12,10 @@
 //        CONFIG         //
 
 const char* ROM_NAME = "ibm_logo.ch8"; // TBA
-bool LEGACY_SHIFT = false; // false for modern CHIP-48 behavior (shift in place), true for legacy COSMAC VIP behavior
+bool LEGACY_SHIFT = false; // false for modern CHIP-48 behavior, true for legacy COSMAC VIP behavior
 bool LEGACY_JUMP = false;
+bool AMIGA_INDEX_OVERFLOW = true; // required for some games like Spacefight 2091
+bool LEGACY_INDEX_SAVE = false;
 
 ///////////////////////////
 
@@ -74,7 +76,9 @@ int main (void) {
     }
 
     // load the ROM
-    load_rom("ROMs/ibm_logo.ch8");
+    char rom_path[256];
+    snprintf(rom_path, sizeof(rom_path), "ROMs/%s", ROM_NAME);
+    load_rom(rom_path);
 
     // seed rand
     srand(time(NULL));
@@ -357,7 +361,7 @@ int main (void) {
 
                             // checking if the current pixel in the sprite row is on
                             if (sprite_byte & (0x80 >> j)) {
-                                int screen_index = ((y_cord + i) * 64) + (x_cord + j); // dont understand this at all , like idk what the variables even mean
+                                int screen_index = ((y_cord + i) * 64) + (x_cord + j); // got it now
                             
                                 // checking if the pixel at coordinates X,Y on the screen is also on
                                 if (display[screen_index] == 1) {
@@ -396,7 +400,107 @@ int main (void) {
                 }
 
                 case 0xF000:
-               
+                    // Timers
+                    switch (GET_NN(opcode)) {
+                        case 0x07:
+                            // Set V[X] to delay_timer
+                            v_register[GET_X(opcode)] = delay_timer;
+                        break;
+
+                        case 0x15:
+                            // Set delay_timer to V[X]
+                            delay_timer = v_register[GET_X(opcode)];
+                        break;
+
+                        case 0x18:
+                            // Set sound_timer to V[X]
+                            sound_timer = v_register[GET_X(opcode)];
+                        break;
+
+                        case 0x1E: {
+                            // Add To Index
+                            uint8_t X = GET_X(opcode);
+
+                            // if the amiga config is enabled, check if the addition pushes the index past 4095
+                            if (AMIGA_INDEX_OVERFLOW) {
+                                v_register[0xF] = (index_register + v_register[X] > 0x0FFF) ? 1 : 0;
+                            }
+
+                            index_register += v_register[X];
+                            break;
+                        }
+
+                        case 0x0A: {
+                            // Get Key
+                            uint8_t X = GET_X(opcode);
+                            bool key_pressed = false;
+
+                            for (int k = 0; k < 16; k++) {
+                                if (keypad[k] == 1) {
+                                    v_register[X] = k; // save the key that was pressed
+                                    key_pressed = true;
+                                    break;
+                                }
+                            }
+
+                            // if no key was pressed rewind pc so we run this instruction again and make a harmless loop
+                            if (!key_pressed) {
+                                program_counter -= 2;
+                            }
+                            break;
+                        }
+
+                        case 0x29: {
+                            // Font Character
+                            uint8_t character = v_register[GET_X(opcode)];
+
+                            // 0x050 is the hardcoded value in memory where sprites begin and every character is 5 bytes tall
+                            index_register = 0x050 + (character * 5); // so this points to the V[X] character in memory
+                            break;
+                        }
+
+                        case 0x33: {
+                            // Binary Coded Decimal Conversion
+                            uint8_t number = v_register[GET_X(opcode)];
+
+                            memory[index_register] = number / 100; // 100s
+                            memory[index_register + 1] = (number / 10) % 10; // 10s
+                            memory[index_register + 2] = number % 10; // 1s
+                            break;
+                        }
+
+                        case 0x55: {
+                            // Store into memory
+                            uint8_t X = GET_X(opcode);
+
+                            // V0 - VX
+                            for (int i = 0; i <= X; i++) {
+                                memory[index_register + i] = v_register[i];
+                            }
+
+                            // if legacy index save is on, the hardware is supposed to modify the index register
+                            if (LEGACY_INDEX_SAVE) {
+                                index_register = index_register + X + 1;
+                            }
+                            break;
+                        }
+
+                        case 0x65: {
+                            // Load Memory
+                            uint8_t X = GET_X(opcode);
+
+                            // V0 - VX
+                            for (int i = 0; i <= X; i++) {
+                                v_register[i] = memory[index_register + i];
+                            }
+
+                            // same legacy check as 0x55
+                            if (LEGACY_INDEX_SAVE) {
+                                index_register = index_register + X + 1;
+                            }
+                            break;
+                        }
+                    }
                 break;
 
             }
