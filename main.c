@@ -1,9 +1,21 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <raylib.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+///////////////////////////
+//        CONFIG         //
+
+const char* ROM_NAME = "ibm_logo.ch8"; // TBA
+bool LEGACY_SHIFT = false; // false for modern CHIP-48 behavior (shift in place), true for legacy COSMAC VIP behavior
+bool LEGACY_JUMP = false;
+
+///////////////////////////
 
 #define GET_X(opcode) ((opcode & 0x0F00) >> 8)
 #define GET_Y(opcode) ((opcode & 0x00F0) >> 4)
@@ -63,6 +75,9 @@ int main (void) {
 
     // load the ROM
     load_rom("ROMs/ibm_logo.ch8");
+
+    // seed rand
+    srand(time(NULL));
 
     const int scale = 20; // scaling, configurable 
     const int screen_width = 64 * scale;
@@ -125,9 +140,13 @@ int main (void) {
                 case 0x0000:
                     // Clear Screen
                     if (GET_NNN(opcode) == 0x00E0) {
-                        for (int i = 0; i < 2048; i++) {
-                            display[i] = 0;
+                        for (int p = 0; p < 2048; p++) {
+                            display[p] = 0;
                         }
+                    }
+                    // Return 
+                    else if (GET_NNN(opcode) == 0x00EE) {
+                        program_counter = stack[--sp];
                     }
                 break;
             
@@ -137,19 +156,30 @@ int main (void) {
                 break;
 
                 case 0x2000:
-                
+                    // Call Subroutine
+                    stack[sp++] = program_counter;
+                    program_counter = GET_NNN(opcode);
                 break;
 
                 case 0x3000:
-                
+                    // Skip 
+                    if (v_register[GET_X(opcode)] == GET_NN(opcode)) {
+                        program_counter += 2;
+                    }
                 break;
 
                 case 0x4000:
-                
+                    // Skip
+                    if (v_register[GET_X(opcode)] != GET_NN(opcode)) {
+                        program_counter += 2;
+                    }
                 break;
 
                 case 0x5000:
-                
+                    // Skip
+                    if (v_register[GET_X(opcode)] == v_register[GET_Y(opcode)]) {
+                        program_counter += 2;
+                    }
                 break;
 
                 case 0x6000:
@@ -163,11 +193,115 @@ int main (void) {
                 break;
 
                 case 0x8000:
-                
+                    // Logical & Arithmetic Instructions
+                    switch (opcode & 0x000F) {
+                        case 0x0000:
+                            // Set
+                            v_register[GET_X(opcode)] = v_register[GET_Y(opcode)];
+                        break;
+
+                        case 0x0001:
+                            // Binary OR
+                            v_register[GET_X(opcode)] = v_register[GET_X(opcode)] | v_register[GET_Y(opcode)];
+                        break;
+
+                        case 0x0002:
+                            // Binary AND
+                            v_register[GET_X(opcode)] = v_register[GET_X(opcode)] & v_register[GET_Y(opcode)];
+                        break;
+
+                        case 0x0003:
+                            // Logical XOR
+                            v_register[GET_X(opcode)] = v_register[GET_X(opcode)] ^ v_register[GET_Y(opcode)];
+                        break;
+
+                        case 0x0004: {
+                            // Add (with Carry)
+
+                            // V[X] and V[Y] are uint8_t, we do this to catch the possible overflow
+                            uint16_t sum = v_register[GET_X(opcode)] + v_register[GET_Y(opcode)];
+
+                            // store the wrapped result back in V[X] (uint8_t) (ex, 256 becomes 0)
+                            v_register[GET_X(opcode)] = sum & 0xFF;
+
+                            // Set V[F] to 1 if it overflowed or 0 if it didnt
+                            v_register[0xF] = (sum > 255) ? 1 : 0;
+                            break;
+                        }
+
+                        case 0x0005: {
+                            // Subtract
+                            uint8_t X = GET_X(opcode);
+                            uint8_t Y = GET_Y(opcode);
+
+                            // saving original values first
+                            uint8_t x_val = v_register[X];
+                            uint8_t y_val = v_register[Y];
+
+                            // C will wrap negative numbers automatically
+                            v_register[X] = x_val - y_val;
+
+                            // if we didnt underflow set V[F] to 1
+                            v_register[0xF] = (x_val >= y_val) ? 1 : 0;
+                            break;
+                        }
+
+                        case 0x0006: {
+                            // Shift Right (Ambiguous Instruction)
+                            uint8_t X = GET_X(opcode);
+                            uint8_t Y = GET_Y(opcode);
+
+                            // legacy instruction
+                            if (LEGACY_SHIFT) {
+                                v_register[X] = v_register[Y];
+                            }
+
+                            uint8_t dropped_bit = v_register[X] & 0x1;
+
+                            v_register[X] >>= 1;
+                            v_register[0xF] = dropped_bit;
+                            break;
+                        }
+
+                        case 0x0007: {
+                            // Subtract #2
+                            uint8_t X = GET_X(opcode);
+                            uint8_t Y = GET_Y(opcode);
+
+                            uint8_t x_val = v_register[X];
+                            uint8_t y_val = v_register[Y];
+
+                            v_register[X] = y_val - x_val;
+
+                            // same as 0x0005 just backwards
+                            v_register[0xF] = (y_val >= x_val) ? 1 : 0;
+                            break;
+                        }
+
+                        case 0x000E: {
+                            // Shift Left (Ambiguous Instruction)
+                            uint8_t X = GET_X(opcode);
+                            uint8_t Y = GET_Y(opcode);
+
+                            // legacy instruction
+                            if (LEGACY_SHIFT) {
+                                v_register[X] = v_register[Y];
+                            }
+
+                            uint8_t dropped_bit = (v_register[X] & 0x80) >> 7;
+
+                            v_register[X] <<= 1;
+                            v_register[0xF] = dropped_bit;
+                            break;
+                        }
+                    }
                 break;
 
                 case 0x9000:
-                
+                    // Skip
+                    if (v_register[GET_X(opcode)] != v_register[GET_Y(opcode)]) {
+                        program_counter += 2;
+                    }
                 break;
 
                 case 0xA000:
@@ -176,12 +310,23 @@ int main (void) {
                 break;
 
                 case 0xB000:
-     
+                    // Jump With Offset (Ambiguous Instruction)
+                    if (LEGACY_JUMP) {
+                        program_counter = GET_NNN(opcode) + v_register[0];
+                    } else {
+                        program_counter = GET_NNN(opcode) + v_register[GET_X(opcode)];
+                    }
                 break;
 
-                case 0xC000:
-              
-                break;
+                case 0xC000: {
+                    // Random
+
+                    // gen a number from 0 to 255
+                    uint8_t random_num = rand() % (255 + 1);
+
+                    v_register[GET_X(opcode)] = random_num & GET_NN(opcode);
+                    break;  
+                }
 
                 case 0xD000: {
                     uint8_t X = GET_X(opcode);
@@ -226,9 +371,29 @@ int main (void) {
 
                     break;
                 }
-                case 0xE000:
-             
-                break;
+
+                case 0xE000: {
+                    // Skip If Key
+                    uint8_t X = GET_X(opcode);
+                    uint8_t key = v_register[X];
+
+                    switch (GET_NN(opcode)) {
+                        case 0x9E:
+                            // Skip if key is pressed
+                            if (keypad[key] == 1) {
+                                program_counter += 2;
+                            }
+                        break;
+
+                        case 0xA1:
+                            // Skip if key isnt pressed
+                            if (keypad[key] == 0) {
+                                program_counter += 2;
+                            }
+                        break;
+                    }
+                    break;
+                }
 
                 case 0xF000:
                
