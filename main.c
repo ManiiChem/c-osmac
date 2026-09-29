@@ -11,11 +11,12 @@
 ///////////////////////////
 //        CONFIG         //
 
-const char* ROM_NAME = "space_invaders_david_winter.ch8"; // TBA
+const char* ROM_NAME = "airplane.ch8"; // TBA
 bool LEGACY_SHIFT = false; // false for modern CHIP-48 behavior, true for legacy COSMAC VIP behavior
 bool LEGACY_JUMP = false;
 bool AMIGA_INDEX_OVERFLOW = true; // required for some games like Spacefight 2091
 bool LEGACY_INDEX_SAVE = false;
+bool PHOSPHOR_DECAY_EFFECT = true;
 
 ///////////////////////////
 
@@ -44,6 +45,9 @@ uint8_t sound_timer = 0;
 
 // 64 pixels wide and 32 pixels tall
 uint8_t display[2048]; 
+
+// the visual glow of the monitor (for the phosphor decay effect)
+float phosphor[2048] = {0};
 
 // keypad
 uint8_t keypad[16];
@@ -120,15 +124,48 @@ int main (void) {
         BeginDrawing(); // setup framebuffer canvas
         ClearBackground(BLACK);
 
-        for (int y = 0; y < 32; y++) {
-            for (int x = 0; x < 64; x++) {
-                int index = (y * 64) + x;
-                
-                if (display[index] == 1) {
-                    DrawRectangle(x*scale, y*scale, scale, scale, WHITE);
+        if (PHOSPHOR_DECAY_EFFECT) {
+            for (int y = 0; y < 32; y++) {
+                for (int x = 0; x < 64; x++) {
+                    int index = (y * 64) + x;
+                    
+                    // charge the phosphor if the pixel is on
+                    if (display[index] == 1) {
+                        phosphor[index] = 1.0f; // 1.0f is the max brightness
+                    } 
+                    // drain the phosphor if its off
+                    else {
+                        phosphor[index] -= 0.15f; // decrease the brightness
+                        if (phosphor[index] < 0.0f) phosphor[index] = 0.0f; // minimum val which is 0
+                    }
+
+                    // draw the pixel using the phosphor value as the opacity
+                    if (phosphor[index] > 0.0f) {
+                        
+                        // convert 0-1 float to 0-255 for raylib
+                        unsigned char opacity = (unsigned char)(phosphor[index] * 255);
+                        
+                        // (R, G, B, Opacity)
+                        Color crt_green = { 50, 255, 50, opacity }; 
+
+                        DrawRectangle(x*scale, y*scale, scale, scale, crt_green);
+                    }
+                }
+            }
+        } 
+        // No effect, but causes flickering
+        else {
+            for (int y = 0; y < 32; y++) {
+                for (int x = 0; x < 64; x++) {
+                    int index = (y * 64) + x;
+                    
+                    if (display[index] == 1) {
+                        DrawRectangle(x*scale, y*scale, scale, scale, WHITE);
+                    }
                 }
             }
         }
+        
 
         // run 10 times per FPS (60 in this case) so this executes 600 instructions per second
         for (int i = 0; i < 10; i++) {
