@@ -11,7 +11,7 @@
 ///////////////////////////
 //        CONFIG         //
 
-const char* ROM_NAME = "airplane.ch8"; // TBA
+const char* ROM_NAME = "space_invaders_david_winter.ch8";
 bool LEGACY_SHIFT = false; // false for modern CHIP-48 behavior, true for legacy COSMAC VIP behavior
 bool LEGACY_JUMP = false;
 bool AMIGA_INDEX_OVERFLOW = true; // required for some games like Spacefight 2091
